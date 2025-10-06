@@ -62,8 +62,19 @@ export const useEncounters = () => {
         setIsLoading(true);
         setError(null);
         
-        const encounterDocs = await db.encounters.find().exec();
-        const encounterData = encounterDocs.map((doc: any) => doc.toJSON ? doc.toJSON() : doc as Encounter);
+        const result = await db.encounters.allDocs({
+          include_docs: true,
+          startkey: 'encounter_',
+          endkey: 'encounter_\uffff'
+        });
+        const encounterData = result.rows
+          .map((row: any) => row.doc)
+          .filter((doc: any) => doc && doc.resourceType === 'Encounter')
+          .map((doc: any) => ({
+            ...doc,
+            _id: undefined,
+            _rev: undefined,
+          } as Encounter));
         setEncounters(encounterData);
       } catch (err) {
         console.error('Failed to load encounters:', err);
@@ -76,12 +87,16 @@ export const useEncounters = () => {
     loadEncounters();
 
     // Subscribe to changes
-    const subscription = db.encounters.find().$.subscribe((encounterDocs: any) => {
-      const encounterData = encounterDocs.map((doc: any) => doc.toJSON ? doc.toJSON() : doc as Encounter);
-      setEncounters(encounterData);
+    const changes = db.encounters.changes({
+      since: 'now',
+      live: true,
+      include_docs: true,
+      filter: (doc: any) => doc.resourceType === 'Encounter'
+    }).on('change', async () => {
+      await loadEncounters();
     });
 
-    return () => subscription.unsubscribe();
+    return () => changes.cancel();
   }, [db]);
 
   const createEncounter = useCallback(async (encounterData: Omit<Encounter, 'id' | 'createdAt' | 'updatedAt'>) => {
@@ -96,7 +111,10 @@ export const useEncounters = () => {
         updatedAt: now,
       };
 
-      await db.encounters.insert(newEncounter);
+      await db.encounters.put({
+        _id: newEncounter.id,
+        ...newEncounter,
+      });
       return newEncounter;
     } catch (err) {
       console.error('Failed to create encounter:', err);
@@ -108,13 +126,16 @@ export const useEncounters = () => {
     if (!db) throw new Error('Database not initialized');
 
     try {
-      const encounter = await db.encounters.findOne(id).exec();
+      const encounter = await db.encounters.get(id);
       if (!encounter) throw new Error('Encounter not found');
 
-      await encounter.update({
+      const updatedEncounter = {
+        ...encounter,
         ...updates,
         updatedAt: new Date().toISOString(),
-      });
+      };
+
+      await db.encounters.put(updatedEncounter);
     } catch (err) {
       console.error('Failed to update encounter:', err);
       throw err;
@@ -125,10 +146,10 @@ export const useEncounters = () => {
     if (!db) throw new Error('Database not initialized');
 
     try {
-      const encounter = await db.encounters.findOne(id).exec();
+      const encounter = await db.encounters.get(id);
       if (!encounter) throw new Error('Encounter not found');
 
-      await encounter.remove();
+      await db.encounters.remove(encounter);
     } catch (err) {
       console.error('Failed to delete encounter:', err);
       throw err;
@@ -139,8 +160,12 @@ export const useEncounters = () => {
     if (!db) return null;
 
     try {
-      const encounter = await db.encounters.findOne(id).exec();
-      return encounter ? (encounter.toJSON ? encounter.toJSON() : encounter as Encounter) : null;
+      const encounter = await db.encounters.get(id);
+      return encounter ? {
+        ...encounter,
+        _id: undefined,
+        _rev: undefined,
+      } as Encounter : null;
     } catch (err) {
       console.error('Failed to get encounter:', err);
       return null;
@@ -151,12 +176,22 @@ export const useEncounters = () => {
     if (!db) return [];
 
     try {
-      const encounterDocs = await db.encounters.find().exec();
-      const filteredDocs = encounterDocs.filter((doc: any) => {
-        const data = doc.toJSON ? doc.toJSON() : doc;
-        return data.subject?.reference === `Patient/${patientId}` || data.subject?.reference === patientId;
+      const result = await db.encounters.allDocs({
+        include_docs: true,
+        startkey: 'encounter_',
+        endkey: 'encounter_\uffff'
       });
-      return filteredDocs.map((doc: any) => doc.toJSON ? doc.toJSON() : doc as Encounter);
+      const filteredDocs = result.rows
+        .map((row: any) => row.doc)
+        .filter((doc: any) => doc && doc.resourceType === 'Encounter')
+        .filter((doc: any) => {
+          return doc.subject?.reference === `Patient/${patientId}` || doc.subject?.reference === patientId;
+        });
+      return filteredDocs.map((doc: any) => ({
+        ...doc,
+        _id: undefined,
+        _rev: undefined,
+      } as Encounter));
     } catch (err) {
       console.error('Failed to get encounters for patient:', err);
       return [];

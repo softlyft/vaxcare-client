@@ -156,7 +156,7 @@ export function ImmunizationForm({ patientId, onSave, onCancel, onSuccess }: Imm
         <Label htmlFor="status">Status *</Label>
         <Select
           value={formData.status}
-          onValueChange={(value) => setFormData(prev => ({ ...prev, status: value as any }))}
+          onValueChange={(value) => setFormData(prev => ({ ...prev, status: value as 'completed' | 'not-done' | 'entered-in-error' }))}
         >
           <SelectTrigger>
             <SelectValue />

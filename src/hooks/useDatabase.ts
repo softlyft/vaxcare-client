@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { initDatabase, getDatabase, VaxCareDatabase } from '@/db/database';
+import { initDatabase, getDatabase, SimpleVaxCareDatabase } from '@/db/database';
 
 export const useDatabase = () => {
-  const [db, setDb] = useState<VaxCareDatabase | null>(null);
+  const [db, setDb] = useState<SimpleVaxCareDatabase | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 

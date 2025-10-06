@@ -65,8 +65,19 @@ export const useMedicationAdministrations = () => {
         setIsLoading(true);
         setError(null);
         
-        const medicationAdministrationDocs = await db.medicationAdministrations.find().exec();
-        const medicationAdministrationData = medicationAdministrationDocs.map((doc: any) => doc.toJSON ? doc.toJSON() : doc as MedicationAdministration);
+        const result = await db.medicationAdministrations.allDocs({
+          include_docs: true,
+          startkey: 'medicationAdministration_',
+          endkey: 'medicationAdministration_\uffff'
+        });
+        const medicationAdministrationData = result.rows
+          .map((row: any) => row.doc)
+          .filter((doc: any) => doc && doc.resourceType === 'MedicationAdministration')
+          .map((doc: any) => ({
+            ...doc,
+            _id: undefined,
+            _rev: undefined,
+          } as MedicationAdministration));
         setMedicationAdministrations(medicationAdministrationData);
       } catch (err) {
         console.error('Failed to load medication administrations:', err);
@@ -79,12 +90,16 @@ export const useMedicationAdministrations = () => {
     loadMedicationAdministrations();
 
     // Subscribe to changes
-    const subscription = db.medicationAdministrations.find().$.subscribe((medicationAdministrationDocs: any) => {
-      const medicationAdministrationData = medicationAdministrationDocs.map((doc: any) => doc.toJSON ? doc.toJSON() : doc as MedicationAdministration);
-      setMedicationAdministrations(medicationAdministrationData);
+    const changes = db.medicationAdministrations.changes({
+      since: 'now',
+      live: true,
+      include_docs: true,
+      filter: (doc: any) => doc.resourceType === 'MedicationAdministration'
+    }).on('change', async () => {
+      await loadMedicationAdministrations();
     });
 
-    return () => subscription.unsubscribe();
+    return () => changes.cancel();
   }, [db]);
 
   const createMedicationAdministration = useCallback(async (medicationAdministrationData: Omit<MedicationAdministration, 'id' | 'createdAt' | 'updatedAt'>) => {
@@ -99,7 +114,10 @@ export const useMedicationAdministrations = () => {
         updatedAt: now,
       };
 
-      await db.medicationAdministrations.insert(newMedicationAdministration);
+      await db.medicationAdministrations.put({
+        _id: newMedicationAdministration.id,
+        ...newMedicationAdministration,
+      });
       return newMedicationAdministration;
     } catch (err) {
       console.error('Failed to create medication administration:', err);
@@ -111,13 +129,16 @@ export const useMedicationAdministrations = () => {
     if (!db) throw new Error('Database not initialized');
 
     try {
-      const medicationAdministration = await db.medicationAdministrations.findOne(id).exec();
+      const medicationAdministration = await db.medicationAdministrations.get(id);
       if (!medicationAdministration) throw new Error('Medication administration not found');
 
-      await medicationAdministration.update({
+      const updatedMedicationAdministration = {
+        ...medicationAdministration,
         ...updates,
         updatedAt: new Date().toISOString(),
-      });
+      };
+
+      await db.medicationAdministrations.put(updatedMedicationAdministration);
     } catch (err) {
       console.error('Failed to update medication administration:', err);
       throw err;
@@ -128,10 +149,10 @@ export const useMedicationAdministrations = () => {
     if (!db) throw new Error('Database not initialized');
 
     try {
-      const medicationAdministration = await db.medicationAdministrations.findOne(id).exec();
+      const medicationAdministration = await db.medicationAdministrations.get(id);
       if (!medicationAdministration) throw new Error('Medication administration not found');
 
-      await medicationAdministration.remove();
+      await db.medicationAdministrations.remove(medicationAdministration);
     } catch (err) {
       console.error('Failed to delete medication administration:', err);
       throw err;
@@ -142,8 +163,12 @@ export const useMedicationAdministrations = () => {
     if (!db) return null;
 
     try {
-      const medicationAdministration = await db.medicationAdministrations.findOne(id).exec();
-      return medicationAdministration ? (medicationAdministration.toJSON ? medicationAdministration.toJSON() : medicationAdministration as MedicationAdministration) : null;
+      const medicationAdministration = await db.medicationAdministrations.get(id);
+      return medicationAdministration ? {
+        ...medicationAdministration,
+        _id: undefined,
+        _rev: undefined,
+      } as MedicationAdministration : null;
     } catch (err) {
       console.error('Failed to get medication administration:', err);
       return null;
@@ -154,12 +179,22 @@ export const useMedicationAdministrations = () => {
     if (!db) return [];
 
     try {
-      const medicationAdministrationDocs = await db.medicationAdministrations.find().exec();
-      const filteredDocs = medicationAdministrationDocs.filter((doc: any) => {
-        const data = doc.toJSON ? doc.toJSON() : doc;
-        return data.subject?.reference === `Patient/${patientId}` || data.subject?.reference === patientId;
+      const result = await db.medicationAdministrations.allDocs({
+        include_docs: true,
+        startkey: 'medicationAdministration_',
+        endkey: 'medicationAdministration_\uffff'
       });
-      return filteredDocs.map((doc: any) => doc.toJSON ? doc.toJSON() : doc as MedicationAdministration);
+      const filteredDocs = result.rows
+        .map((row: any) => row.doc)
+        .filter((doc: any) => doc && doc.resourceType === 'MedicationAdministration')
+        .filter((doc: any) => {
+          return doc.subject?.reference === `Patient/${patientId}` || doc.subject?.reference === patientId;
+        });
+      return filteredDocs.map((doc: any) => ({
+        ...doc,
+        _id: undefined,
+        _rev: undefined,
+      } as MedicationAdministration));
     } catch (err) {
       console.error('Failed to get medication administrations for patient:', err);
       return [];
@@ -170,12 +205,22 @@ export const useMedicationAdministrations = () => {
     if (!db) return [];
 
     try {
-      const medicationAdministrationDocs = await db.medicationAdministrations.find().exec();
-      const filteredDocs = medicationAdministrationDocs.filter((doc: any) => {
-        const data = doc.toJSON ? doc.toJSON() : doc;
-        return data.encounter?.reference === `Encounter/${encounterId}` || data.encounter?.reference === encounterId;
+      const result = await db.medicationAdministrations.allDocs({
+        include_docs: true,
+        startkey: 'medicationAdministration_',
+        endkey: 'medicationAdministration_\uffff'
       });
-      return filteredDocs.map((doc: any) => doc.toJSON ? doc.toJSON() : doc as MedicationAdministration);
+      const filteredDocs = result.rows
+        .map((row: any) => row.doc)
+        .filter((doc: any) => doc && doc.resourceType === 'MedicationAdministration')
+        .filter((doc: any) => {
+          return doc.encounter?.reference === `Encounter/${encounterId}` || doc.encounter?.reference === encounterId;
+        });
+      return filteredDocs.map((doc: any) => ({
+        ...doc,
+        _id: undefined,
+        _rev: undefined,
+      } as MedicationAdministration));
     } catch (err) {
       console.error('Failed to get medication administrations for encounter:', err);
       return [];

@@ -316,7 +316,10 @@ export class ImmunizationWorkflowService {
       updatedAt: encounterNow,
     };
 
-    await db.encounters.insert(newEncounter);
+    await db.encounters.put({
+      _id: newEncounter.id,
+      ...newEncounter,
+    });
     return newEncounter;
   }
 
@@ -325,14 +328,24 @@ export class ImmunizationWorkflowService {
     if (!db) throw new Error('Database not initialized');
 
     // Try to find existing medication by vaccine code
-    const medicationDocs = await db.medications.find().exec();
-    const existingMedication = medicationDocs.find((doc: any) => {
-      const medicationData = doc.toJSON ? doc.toJSON() : doc;
-      return medicationData.code?.coding?.some((coding: any) => coding.code === data.vaccineCode);
+    const result = await db.medications.allDocs({
+      include_docs: true,
+      startkey: 'medication_',
+      endkey: 'medication_\uffff'
     });
+    const existingMedication = result.rows
+      .map((row: any) => row.doc)
+      .filter((doc: any) => doc && doc.resourceType === 'Medication')
+      .find((doc: any) => {
+        return doc.code?.coding?.some((coding: any) => coding.code === data.vaccineCode);
+      });
 
     if (existingMedication) {
-      return existingMedication.toJSON ? existingMedication.toJSON() : existingMedication as Medication;
+      return {
+        ...existingMedication,
+        _id: undefined,
+        _rev: undefined,
+      } as Medication;
     }
 
     // Create new medication if not found
@@ -365,7 +378,10 @@ export class ImmunizationWorkflowService {
       updatedAt: medicationNow,
     };
 
-    await db.medications.insert(newMedication);
+    await db.medications.put({
+      _id: newMedication.id,
+      ...newMedication,
+    });
     return newMedication;
   }
 
@@ -435,7 +451,10 @@ export class ImmunizationWorkflowService {
       updatedAt: immunizationNow,
     };
 
-    await db.immunizations.insert(newImmunization);
+    await db.immunizations.put({
+      _id: newImmunization.id,
+      ...newImmunization,
+    });
     return newImmunization;
   }
 
@@ -493,7 +512,10 @@ export class ImmunizationWorkflowService {
       updatedAt: medicationAdminNow,
     };
 
-    await db.medicationAdministrations.insert(newMedicationAdministration);
+    await db.medicationAdministrations.put({
+      _id: newMedicationAdministration.id,
+      ...newMedicationAdministration,
+    });
     return newMedicationAdministration;
   }
 
