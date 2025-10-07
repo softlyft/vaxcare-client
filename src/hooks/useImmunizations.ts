@@ -28,6 +28,9 @@ export interface Immunization {
     display: string;
   };
   lotNumber?: string;
+  manufacturer?: {
+    display: string;
+  };
   expirationDate?: string;
   site?: {
     coding: Array<{
@@ -65,8 +68,20 @@ export const useImmunizations = () => {
         setIsLoading(true);
         setError(null);
         
-        const immunizationDocs = await db.immunizations.find().exec();
-        const immunizationData = immunizationDocs.map((doc: any) => doc.toJSON ? doc.toJSON() : doc as Immunization);
+        const result = await db.immunizations.allDocs({
+          include_docs: true,
+          startkey: 'immunization_',
+          endkey: 'immunization_\uffff'
+        });
+        const immunizationData = result.rows
+          .map((row: any) => row.doc)
+          .filter((doc: any) => doc && doc.resourceType === 'Immunization')
+          .map((doc: any) => ({
+            ...doc,
+            // Remove PouchDB-specific fields for compatibility
+            _id: undefined,
+            _rev: undefined,
+          } as Immunization));
         setImmunizations(immunizationData);
       } catch (err) {
         console.error('Failed to load immunizations:', err);
@@ -78,13 +93,17 @@ export const useImmunizations = () => {
 
     loadImmunizations();
 
-    // Subscribe to changes
-    const subscription = db.immunizations.find().$.subscribe((immunizationDocs: any) => {
-      const immunizationData = immunizationDocs.map((doc: any) => doc.toJSON ? doc.toJSON() : doc as Immunization);
-      setImmunizations(immunizationData);
+    // Set up real-time changes listener
+    const changes = db.immunizations.changes({
+      since: 'now',
+      live: true,
+      include_docs: true,
+      filter: (doc: any) => doc.resourceType === 'Immunization'
+    }).on('change', async () => {
+      await loadImmunizations();
     });
 
-    return () => subscription.unsubscribe();
+    return () => changes.cancel();
   }, [db]);
 
   const createImmunization = useCallback(async (immunizationData: Omit<Immunization, 'id' | 'createdAt' | 'updatedAt'>) => {
@@ -99,7 +118,10 @@ export const useImmunizations = () => {
         updatedAt: now,
       };
 
-      await db.immunizations.insert(newImmunization);
+      await db.immunizations.put({
+        _id: newImmunization.id,
+        ...newImmunization,
+      });
       return newImmunization;
     } catch (err) {
       console.error('Failed to create immunization:', err);
@@ -111,13 +133,16 @@ export const useImmunizations = () => {
     if (!db) throw new Error('Database not initialized');
 
     try {
-      const immunization = await db.immunizations.findOne(id).exec();
+      const immunization = await db.immunizations.get(id);
       if (!immunization) throw new Error('Immunization not found');
 
-      await immunization.update({
+      const updatedImmunization = {
+        ...immunization,
         ...updates,
         updatedAt: new Date().toISOString(),
-      });
+      };
+
+      await db.immunizations.put(updatedImmunization);
     } catch (err) {
       console.error('Failed to update immunization:', err);
       throw err;
@@ -128,10 +153,10 @@ export const useImmunizations = () => {
     if (!db) throw new Error('Database not initialized');
 
     try {
-      const immunization = await db.immunizations.findOne(id).exec();
+      const immunization = await db.immunizations.get(id);
       if (!immunization) throw new Error('Immunization not found');
 
-      await immunization.remove();
+      await db.immunizations.remove(immunization);
     } catch (err) {
       console.error('Failed to delete immunization:', err);
       throw err;
@@ -142,12 +167,22 @@ export const useImmunizations = () => {
     if (!db) return [];
 
     try {
-      const immunizationDocs = await db.immunizations.find().exec();
-      const filteredDocs = immunizationDocs.filter((doc: any) => {
-        const data = doc.toJSON ? doc.toJSON() : doc;
-        return data.patient?.reference === `Patient/${patientId}` || data.patient?.reference === patientId;
+      const result = await db.immunizations.allDocs({
+        include_docs: true,
+        startkey: 'immunization_',
+        endkey: 'immunization_\uffff'
       });
-      return filteredDocs.map((doc: any) => doc.toJSON ? doc.toJSON() : doc as Immunization);
+      const filteredDocs = result.rows
+        .map((row: any) => row.doc)
+        .filter((doc: any) => doc && doc.resourceType === 'Immunization')
+        .filter((doc: any) => {
+          return doc.patient?.reference === `Patient/${patientId}` || doc.patient?.reference === patientId;
+        });
+      return filteredDocs.map((doc: any) => ({
+        ...doc,
+        _id: undefined,
+        _rev: undefined,
+      } as Immunization));
     } catch (err) {
       console.error('Failed to get immunizations for patient:', err);
       return [];

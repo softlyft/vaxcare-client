@@ -39,7 +39,7 @@ export default function LoginPage() {
       } else {
         setError('Invalid username or password');
       }
-    } catch (err) {
+    } catch {
       setError('Login failed. Please try again.');
     }
   };

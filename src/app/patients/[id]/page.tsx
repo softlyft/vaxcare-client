@@ -31,6 +31,7 @@ export default function PatientDetailPage({ params }: PatientDetailPageProps) {
   const [showViewDialog, setShowViewDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showJsonDialog, setShowJsonDialog] = useState(false);
+  const [showAddImmunization, setShowAddImmunization] = useState(false);
 
   useEffect(() => {
     const loadParams = async () => {

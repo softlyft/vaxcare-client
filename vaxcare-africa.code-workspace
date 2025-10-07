@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../fhir-stack"
+		},
+		{
+			"path": "../api-service"
+		}
+	],
+	"settings": {}
+}

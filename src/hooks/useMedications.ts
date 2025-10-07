@@ -58,8 +58,19 @@ export const useMedications = () => {
         setIsLoading(true);
         setError(null);
         
-        const medicationDocs = await db.medications.find().exec();
-        const medicationData = medicationDocs.map((doc: any) => doc.toJSON ? doc.toJSON() : doc as Medication);
+        const result = await db.medications.allDocs({
+          include_docs: true,
+          startkey: 'medication_',
+          endkey: 'medication_\uffff'
+        });
+        const medicationData = result.rows
+          .map((row: any) => row.doc)
+          .filter((doc: any) => doc && doc.resourceType === 'Medication')
+          .map((doc: any) => ({
+            ...doc,
+            _id: undefined,
+            _rev: undefined,
+          } as Medication));
         setMedications(medicationData);
       } catch (err) {
         console.error('Failed to load medications:', err);
@@ -72,12 +83,16 @@ export const useMedications = () => {
     loadMedications();
 
     // Subscribe to changes
-    const subscription = db.medications.find().$.subscribe((medicationDocs: any) => {
-      const medicationData = medicationDocs.map((doc: any) => doc.toJSON ? doc.toJSON() : doc as Medication);
-      setMedications(medicationData);
+    const changes = db.medications.changes({
+      since: 'now',
+      live: true,
+      include_docs: true,
+      filter: (doc: any) => doc.resourceType === 'Medication'
+    }).on('change', async () => {
+      await loadMedications();
     });
 
-    return () => subscription.unsubscribe();
+    return () => changes.cancel();
   }, [db]);
 
   const createMedication = useCallback(async (medicationData: Omit<Medication, 'id' | 'createdAt' | 'updatedAt'>) => {
@@ -92,7 +107,10 @@ export const useMedications = () => {
         updatedAt: now,
       };
 
-      await db.medications.insert(newMedication);
+      await db.medications.put({
+        _id: newMedication.id,
+        ...newMedication,
+      });
       return newMedication;
     } catch (err) {
       console.error('Failed to create medication:', err);
@@ -104,13 +122,16 @@ export const useMedications = () => {
     if (!db) throw new Error('Database not initialized');
 
     try {
-      const medication = await db.medications.findOne(id).exec();
+      const medication = await db.medications.get(id);
       if (!medication) throw new Error('Medication not found');
 
-      await medication.update({
+      const updatedMedication = {
+        ...medication,
         ...updates,
         updatedAt: new Date().toISOString(),
-      });
+      };
+
+      await db.medications.put(updatedMedication);
     } catch (err) {
       console.error('Failed to update medication:', err);
       throw err;
@@ -121,10 +142,10 @@ export const useMedications = () => {
     if (!db) throw new Error('Database not initialized');
 
     try {
-      const medication = await db.medications.findOne(id).exec();
+      const medication = await db.medications.get(id);
       if (!medication) throw new Error('Medication not found');
 
-      await medication.remove();
+      await db.medications.remove(medication);
     } catch (err) {
       console.error('Failed to delete medication:', err);
       throw err;
@@ -135,8 +156,12 @@ export const useMedications = () => {
     if (!db) return null;
 
     try {
-      const medication = await db.medications.findOne(id).exec();
-      return medication ? (medication.toJSON ? medication.toJSON() : medication as Medication) : null;
+      const medication = await db.medications.get(id);
+      return medication ? {
+        ...medication,
+        _id: undefined,
+        _rev: undefined,
+      } as Medication : null;
     } catch (err) {
       console.error('Failed to get medication:', err);
       return null;
@@ -147,12 +172,22 @@ export const useMedications = () => {
     if (!db) return null;
 
     try {
-      const medicationDocs = await db.medications.find().exec();
-      const medication = medicationDocs.find((doc: any) => {
-        const data = doc.toJSON ? doc.toJSON() : doc;
-        return data.code?.coding?.some((coding: any) => coding.code === vaccineCode);
+      const result = await db.medications.allDocs({
+        include_docs: true,
+        startkey: 'medication_',
+        endkey: 'medication_\uffff'
       });
-      return medication ? (medication.toJSON ? medication.toJSON() : medication as Medication) : null;
+      const medication = result.rows
+        .map((row: any) => row.doc)
+        .filter((doc: any) => doc && doc.resourceType === 'Medication')
+        .find((doc: any) => {
+          return doc.code?.coding?.some((coding: any) => coding.code === vaccineCode);
+        });
+      return medication ? {
+        ...medication,
+        _id: undefined,
+        _rev: undefined,
+      } as Medication : null;
     } catch (err) {
       console.error('Failed to find medication by vaccine code:', err);
       return null;

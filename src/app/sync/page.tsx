@@ -7,20 +7,28 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { usePatients } from '@/hooks/usePatients';
 import { useImmunizations } from '@/hooks/useImmunizations';
-import { RefreshCw, CheckCircle, XCircle, Clock, Wifi, WifiOff, Database, Server } from 'lucide-react';
-import { syncManager, SyncStatus as SyncManagerStatus } from '@/services/syncManager';
+import { RefreshCw, CheckCircle, XCircle, Clock, Wifi, WifiOff, Database, Server, AlertCircle } from 'lucide-react';
+import { getDatabase } from '@/db/database';
 
 interface SyncStatus {
-  status: 'idle' | 'syncing' | 'success' | 'error';
+  status: 'idle' | 'syncing' | 'success' | 'error' | 'connected' | 'disconnected';
   lastSync?: Date;
   error?: string;
+  syncEnabled: boolean;
+  couchDbUrl?: string;
+  pendingChanges: number;
+  conflicts: number;
 }
 
 export default function SyncPage() {
   const { patients } = usePatients();
   const { immunizations } = useImmunizations();
-  const [syncStatus, setSyncStatus] = useState<SyncStatus>({ status: 'idle' });
-  const [syncManagerStatus, setSyncManagerStatus] = useState<SyncManagerStatus>(syncManager.getStatus());
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>({ 
+    status: 'idle', 
+    syncEnabled: false, 
+    pendingChanges: 0, 
+    conflicts: 0 
+  });
   const [isOnline, setIsOnline] = useState(true);
 
   useEffect(() => {
@@ -30,42 +38,94 @@ export default function SyncPage() {
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
-    // Subscribe to sync manager status changes
-    const unsubscribe = syncManager.subscribeToStatus((status) => {
-      setSyncManagerStatus(status);
-      setIsOnline(status.isOnline);
-    });
+    // Check PouchDB sync status
+    const checkSyncStatus = async () => {
+      try {
+        const db = getDatabase();
+        if (!db) {
+          setSyncStatus(prev => ({ ...prev, status: 'disconnected', syncEnabled: false }));
+          return;
+        }
+
+        const syncEnabled = process.env.NEXT_PUBLIC_SYNC_ENABLED === 'true';
+        const couchDbUrl = process.env.NEXT_PUBLIC_COUCHDB_URL || 'http://localhost:5984';
+        
+        setSyncStatus(prev => ({
+          ...prev,
+          syncEnabled,
+          couchDbUrl,
+          status: syncEnabled ? 'connected' : 'idle'
+        }));
+
+        // Monitor sync events if enabled
+        if (syncEnabled && db.sync) {
+          Object.values(db.sync).forEach(sync => {
+            sync.on('change', () => {
+              setSyncStatus(prev => ({ ...prev, lastSync: new Date() }));
+            });
+            
+            sync.on('error', (err: any) => {
+              setSyncStatus(prev => ({ 
+                ...prev, 
+                status: 'error', 
+                error: err.message || 'Sync error occurred' 
+              }));
+            });
+          });
+        }
+      } catch (error) {
+        console.error('Failed to check sync status:', error);
+        setSyncStatus(prev => ({ 
+          ...prev, 
+          status: 'error', 
+          error: 'Failed to initialize sync' 
+        }));
+      }
+    };
+
+    checkSyncStatus();
 
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
-      unsubscribe();
     };
   }, []);
 
-  const mockSyncToServer = async () => {
-    setSyncStatus({ status: 'syncing' });
+  const manualSync = async () => {
+    setSyncStatus(prev => ({ ...prev, status: 'syncing' }));
 
     try {
-      const result = await syncManager.syncToServer();
-      
-      if (result.success) {
-        setSyncStatus({ 
-          status: 'success', 
-          lastSync: new Date() 
-        });
-        setSyncManagerStatus(syncManager.getStatus());
-      } else {
-        setSyncStatus({ 
-          status: 'error', 
-          error: result.errors.join(', ') 
-        });
+      const db = getDatabase();
+      if (!db) {
+        throw new Error('Database not available');
       }
+
+      if (!syncStatus.syncEnabled) {
+        throw new Error('CouchDB sync is not enabled');
+      }
+
+      // Force sync all collections
+      const syncPromises = Object.values(db.sync).map(sync => {
+        return new Promise((resolve, reject) => {
+          sync.on('complete', resolve);
+          sync.on('error', reject);
+        });
+      });
+
+      await Promise.all(syncPromises);
+      
+      setSyncStatus(prev => ({ 
+        ...prev, 
+        status: 'success', 
+        lastSync: new Date() 
+      }));
     } catch (error) {
-      setSyncStatus({ 
+      console.error('Manual sync failed:', error);
+      setSyncStatus(prev => ({ 
+        ...prev, 
         status: 'error', 
         error: error instanceof Error ? error.message : 'Sync failed' 
-      });
+      }));
     }
   };
 
@@ -105,6 +165,10 @@ export default function SyncPage() {
         return <CheckCircle className="h-5 w-5 text-green-500" />;
       case 'error':
         return <XCircle className="h-5 w-5 text-red-500" />;
+      case 'connected':
+        return <CheckCircle className="h-5 w-5 text-green-500" />;
+      case 'disconnected':
+        return <XCircle className="h-5 w-5 text-red-500" />;
       default:
         return <RefreshCw className="h-5 w-5 text-gray-500" />;
     }
@@ -118,8 +182,12 @@ export default function SyncPage() {
         return 'Sync completed';
       case 'error':
         return 'Sync failed';
+      case 'connected':
+        return 'CouchDB sync active';
+      case 'disconnected':
+        return 'CouchDB sync disabled';
       default:
-        return 'Ready to sync';
+        return syncStatus.syncEnabled ? 'Ready to sync' : 'Sync disabled';
     }
   };
 
@@ -189,25 +257,41 @@ export default function SyncPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Server Data</CardTitle>
+              <CardTitle>CouchDB Server</CardTitle>
               <CardDescription>
-                Data on the server (mock)
+                {syncStatus.syncEnabled ? 'Connected to CouchDB' : 'CouchDB sync disabled'}
               </CardDescription>
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Patients</span>
-                  <Badge variant="outline">~{patients.length + Math.floor(Math.random() * 10)}</Badge>
+                  <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Sync Status</span>
+                  <Badge variant={syncStatus.syncEnabled ? "default" : "secondary"}>
+                    {syncStatus.syncEnabled ? 'Enabled' : 'Disabled'}
+                  </Badge>
                 </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Immunizations</span>
-                  <Badge variant="outline">~{immunizations.length + Math.floor(Math.random() * 20)}</Badge>
-                </div>
+                {syncStatus.couchDbUrl && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Server URL</span>
+                    <Badge variant="outline">{syncStatus.couchDbUrl}</Badge>
+                  </div>
+                )}
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Database</span>
-                  <Badge variant="outline">PostgreSQL</Badge>
+                  <Badge variant="outline">CouchDB</Badge>
                 </div>
+                {syncStatus.pendingChanges > 0 && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Pending Changes</span>
+                    <Badge variant="destructive">{syncStatus.pendingChanges}</Badge>
+                  </div>
+                )}
+                {syncStatus.conflicts > 0 && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Conflicts</span>
+                    <Badge variant="destructive">{syncStatus.conflicts}</Badge>
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -250,21 +334,21 @@ export default function SyncPage() {
               {/* Sync Buttons */}
               <div className="flex items-center space-x-4">
                 <Button
-                  onClick={mockSyncToServer}
-                  disabled={!isOnline || syncStatus.status === 'syncing'}
+                  onClick={manualSync}
+                  disabled={!isOnline || syncStatus.status === 'syncing' || !syncStatus.syncEnabled}
                   className="flex-1"
                 >
                   <RefreshCw className="mr-2 h-4 w-4" />
-                  Sync to Server
+                  {syncStatus.syncEnabled ? 'Force Sync Now' : 'Sync Disabled'}
                 </Button>
                 <Button
-                  onClick={mockSyncFromServer}
-                  disabled={!isOnline || syncStatus.status === 'syncing'}
+                  onClick={() => window.location.reload()}
+                  disabled={syncStatus.status === 'syncing'}
                   variant="outline"
                   className="flex-1"
                 >
                   <Database className="mr-2 h-4 w-4" />
-                  Sync from Server
+                  Refresh Status
                 </Button>
               </div>
 

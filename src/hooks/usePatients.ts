@@ -43,8 +43,20 @@ export const usePatients = () => {
         setIsLoading(true);
         setError(null);
         
-        const patientDocs = await db.patients.find().exec();
-        const patientData = patientDocs.map((doc: any) => doc.toJSON ? doc.toJSON() : doc as Patient);
+        const result = await db.patients.allDocs({
+          include_docs: true,
+          startkey: 'patient_',
+          endkey: 'patient_\uffff'
+        });
+        const patientData = result.rows
+          .map((row: any) => row.doc)
+          .filter((doc: any) => doc && doc.resourceType === 'Patient')
+          .map((doc: any) => ({
+            ...doc,
+            // Remove PouchDB-specific fields for compatibility
+            _id: undefined,
+            _rev: undefined,
+          } as Patient));
         setPatients(patientData);
       } catch (err) {
         console.error('Failed to load patients:', err);
@@ -56,13 +68,17 @@ export const usePatients = () => {
 
     loadPatients();
 
-    // Subscribe to changes
-    const subscription = db.patients.find().$.subscribe((patientDocs: any) => {
-      const patientData = patientDocs.map((doc: any) => doc.toJSON ? doc.toJSON() : doc as Patient);
-      setPatients(patientData);
+    // Set up real-time changes listener
+    const changes = db.patients.changes({
+      since: 'now',
+      live: true,
+      include_docs: true,
+      filter: (doc: any) => doc.resourceType === 'Patient'
+    }).on('change', async () => {
+      await loadPatients();
     });
 
-    return () => subscription.unsubscribe();
+    return () => changes.cancel();
   }, [db]);
 
   const createPatient = useCallback(async (patientData: Omit<Patient, 'id' | 'createdAt' | 'updatedAt'>) => {
@@ -77,8 +93,15 @@ export const usePatients = () => {
         updatedAt: now,
       };
 
-      await db.patients.insert(newPatient);
-      return newPatient;
+      await db.patients.put({
+        _id: newPatient.id,
+        ...newPatient,
+      });
+      return {
+        ...newPatient,
+        _id: undefined,
+        _rev: undefined,
+      } as Patient;
     } catch (err) {
       console.error('Failed to create patient:', err);
       throw err;
@@ -89,13 +112,16 @@ export const usePatients = () => {
     if (!db) throw new Error('Database not initialized');
 
     try {
-      const patient = await db.patients.findOne(id).exec();
+      const patient = await db.patients.get(id);
       if (!patient) throw new Error('Patient not found');
 
-      await patient.update({
+      const updatedPatient = {
+        ...patient,
         ...updates,
         updatedAt: new Date().toISOString(),
-      });
+      };
+
+      await db.patients.put(updatedPatient);
     } catch (err) {
       console.error('Failed to update patient:', err);
       throw err;
@@ -106,10 +132,10 @@ export const usePatients = () => {
     if (!db) throw new Error('Database not initialized');
 
     try {
-      const patient = await db.patients.findOne(id).exec();
+      const patient = await db.patients.get(id);
       if (!patient) throw new Error('Patient not found');
 
-      await patient.remove();
+      await db.patients.remove(patient);
     } catch (err) {
       console.error('Failed to delete patient:', err);
       throw err;
@@ -120,8 +146,12 @@ export const usePatients = () => {
     if (!db) return null;
 
     try {
-      const patient = await db.patients.findOne(id).exec();
-      return patient ? (patient.toJSON ? patient.toJSON() : patient as Patient) : null;
+      const patient = await db.patients.get(id);
+      return patient ? {
+        ...patient,
+        _id: undefined,
+        _rev: undefined,
+      } as Patient : null;
     } catch (err) {
       console.error('Failed to get patient:', err);
       return null;
